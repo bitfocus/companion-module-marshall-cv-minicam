@@ -133,6 +133,10 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 			(_data) => {
 				this.#sendMessage(viscaInquiryCommands.CAM_WBModeInq).then(
 					(data) => {
+						//
+						// A bug in marshall visca , if WB is set to manual
+						// an inquiry will return AWB beeing set
+						//
 						// Response format
 						// Y0 50 0X FF
 						// Y = 0xZ0  + 0x80
@@ -144,7 +148,7 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 							console.log('ERROR IN INQ RESP')
 							return // Error!! Handle this
 						}
-						this.#state.wb.mode = data[2]
+						this.#state.wb.mode = data[2] as WBMode
 						this.emit('stateChanged')
 					},
 					() => {
@@ -153,7 +157,7 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 				)
 			},
 			() => {
-				console.log('Error changing WB')
+				console.log('Error changing WB to mode', mode)
 			},
 		)
 	}

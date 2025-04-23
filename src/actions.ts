@@ -73,11 +73,12 @@ export function UpdateActions(self: ModuleInstance): void {
 						{ id: WBMode.one_push, label: 'one push' },
 						{ id: WBMode.manual, label: 'manual' },
 					],
-					default: 'auto',
+					default: WBMode.atw,
 				},
 			],
 			callback: async (event) => {
-				await self.camera.setWBMode(event.options['wb_mode_id'] as WBMode)
+				const reqMode: WBMode = Object.values(WBMode)[Number(event.options['wb_mode_id'])] as WBMode
+				await self.camera.setWBMode(reqMode)
 			},
 		},
 	})
