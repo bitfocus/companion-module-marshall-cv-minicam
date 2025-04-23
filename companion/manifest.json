@@ -3,7 +3,7 @@
 	"name": "Marshall CV5xx series minicam ",
 	"shortname": "Marshall CV Minicam",
 	"description": "Control mashall CV5xx series minicam",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"license": "MIT",
 	"repository": "git+https://github.com/bitfocus/companion-module-marshall-cv-minicam.git",
 	"bugs": "https://github.com/bitfocus/companion-module-marshall-cv-minicam/issues",
