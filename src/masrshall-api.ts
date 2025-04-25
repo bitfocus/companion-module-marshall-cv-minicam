@@ -1,4 +1,4 @@
-import { viscaCommands, viscaInquiryCommands } from './commands.js'
+import { viscaCommands, viscaInquiryCommands, viscaResponseCommands } from './commands.js'
 import { TCPHelper } from '@companion-module/base'
 import { EventEmitter } from 'eventemitter3'
 
@@ -21,10 +21,26 @@ export enum WBMode {
 	'manual',
 }
 
+export enum WBGainAdjustChannel {
+	'red',
+	'blue',
+}
+
+export enum WBGainAdjust {
+	'rest',
+	'up',
+	'down',
+	'direct',
+}
+
 export type MarshallCV5xxState = {
 	osdVisible: boolean
 	wb: {
 		mode: WBMode
+		gain: {
+			red: number
+			blue: number
+		}
 	}
 }
 
@@ -52,6 +68,10 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 		osdVisible: false,
 		wb: {
 			mode: WBMode.atw,
+			gain: {
+				red: 0,
+				blue: 0,
+			},
 		},
 	}
 
@@ -93,10 +113,8 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 				let hexStr = ''
 				msg.forEach((item) => (hexStr += parseInt(String(item), 10).toString(16).padStart(2, '0').toUpperCase()))
 				if (hexStr === '9041FF') {
-					console.log('[OK]')
 					if (this.#sentQueue[0]) this.#sentQueue[0].ackReceived = true
 				} else if (hexStr === '9051FF') {
-					console.log('[COMPLETED]')
 					const sent = this.#sentQueue.shift()
 					if (sent && sent.ackReceived) {
 						sent.resolve(msg)
@@ -106,7 +124,6 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 				} else {
 					const sent = this.#sentQueue.shift()
 					if (sent) {
-						console.log('Message is ', msg)
 						sent.resolve(msg)
 					} else {
 						console.log('UNKOWN RESPONSE', hexStr)
@@ -117,11 +134,45 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 		})
 	}
 
-	async #sendMessage(cmd: string): Promise<Uint8Array> {
-		await this.#connection.send(Buffer.from(cmd.replace('x', String(this.#camID)), 'hex'))
+	async #sendMessage(cmd: string, para: { [key: string]: number } = { x: this.#camID }): Promise<Uint8Array> {
+		//await this.#connection.send(Buffer.from(cmd.replace('x', String(this.#camID)), 'hex'))
+		let parsedCmd = cmd
+		for (const p in para) {
+			parsedCmd = parsedCmd.replace(p, para[p].toString(16))
+		}
+		await this.#connection.send(Buffer.from(parsedCmd, 'hex'))
 		return new Promise<Uint8Array>((resolve, reject) => {
 			this.#sentQueue.push({ ackReceived: false, resolve, reject })
 		})
+	}
+
+	#decodePacket(pkt: Uint8Array, hint?: viscaResponseCommands): { [key: string]: number } {
+		const ret: { [key: string]: number } = {}
+		const hintBytes = hint!.split(/(?=(?:..)*$)/)
+		for (const [i, value] of hintBytes.entries()) {
+			const intVal = parseInt(value, 16)
+			if (!intVal) {
+				if (value[0] === value[1]) {
+					// case pp
+					ret[value[0]] = pkt[i]
+				} else if (isNaN(parseInt(value[0], 16))) {
+					// case p0
+					ret[value[0]] = (pkt[i] >> 4) & 0xf
+				} else if (isNaN(parseInt(value[1], 16))) {
+					// case 0p
+					ret[value[1]] = pkt[i] & 0xf
+				}
+			} else {
+				if (intVal !== pkt[i]) {
+					console.log('Error is resp: byte', i, 'does not match. Want', hint![i], 'found', pkt[i])
+				}
+			}
+		}
+		const recvCamID = ret.y ^ 0x8
+		if (recvCamID !== this.#camID) {
+			console.log('Error in resp: camID does not match. Want', this.#camID, 'found', ret.y)
+		}
+		return ret
 	}
 
 	state(): MarshallCV5xxState {
@@ -129,7 +180,9 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 	}
 
 	async setWBMode(mode: WBMode): Promise<void> {
-		this.#sendMessage((viscaCommands.wb.mode as any)[mode]).then(
+		const mode_str: WBMode = Object.values(WBMode)[Number(mode)] as WBMode
+
+		this.#sendMessage((viscaCommands.wb.mode as any)[mode_str]).then(
 			(_data) => {
 				this.#sendMessage(viscaInquiryCommands.CAM_WBModeInq).then(
 					(data) => {
@@ -137,18 +190,8 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 						// A bug in marshall visca , if WB is set to manual
 						// an inquiry will return AWB beeing set
 						//
-						// Response format
-						// Y0 50 0X FF
-						// Y = 0xZ0  + 0x80
-						// Z = camera id
-						// X = set whitebalace
-						const header1 = 0x80 + (this.#camID << 4)
-						const msgId = 0x50
-						if (data[0] !== header1 || data[1] !== msgId) {
-							console.log('ERROR IN INQ RESP')
-							return // Error!! Handle this
-						}
-						this.#state.wb.mode = data[2] as WBMode
+						const para = this.#decodePacket(data, viscaResponseCommands.FourByteOneParaValue)
+						this.#state.wb.mode = para.x as WBMode
 						this.emit('stateChanged')
 					},
 					() => {
@@ -157,7 +200,46 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 				)
 			},
 			() => {
-				console.log('Error changing WB to mode', mode)
+				console.log('Error changing WB to mode', mode_str)
+			},
+		)
+	}
+
+	// value 0-255
+	async WBGainAdjust(channel: WBGainAdjustChannel, fun: WBGainAdjust, value?: number): Promise<void> {
+		const ch_str = Object.values(WBGainAdjustChannel)[Number(channel)] as WBGainAdjustChannel
+		const fun_str = Object.values(WBGainAdjust)[Number(fun)] as WBGainAdjust
+		const cmd = (viscaCommands.wb.gain as any)[ch_str][fun_str]
+		const para = {
+			x: this.#camID,
+			p: 0,
+			q: 0,
+		}
+
+		if (value !== undefined && fun === WBGainAdjust.direct) {
+			para['p'] = (value >> 4) & 0xf
+			para['q'] = value & 0xf
+		}
+		this.#sendMessage(cmd, para).then(
+			(_data) => {
+				const msg =
+					channel === WBGainAdjustChannel.blue ? viscaInquiryCommands.CAM_BGainInq : viscaInquiryCommands.CAM_RGainInq
+				this.#sendMessage(msg).then(
+					(data) => {
+						const recvPara = this.#decodePacket(data, viscaResponseCommands.SevenByteTwoParaValues)
+						const recvGain = ((recvPara.p & 0xf) << 4) | (recvPara.q & 0xf)
+						if (channel === WBGainAdjustChannel.blue) this.#state.wb.gain.blue = recvGain
+						else if (channel === WBGainAdjustChannel.red) this.#state.wb.gain.red = recvGain
+						else console.log('Error: unknown color channel')
+						this.emit('stateChanged')
+					},
+					() => {
+						console.log('Error querying WB gain')
+					},
+				)
+			},
+			() => {
+				console.log('Error adjusting WB gain')
 			},
 		)
 	}
@@ -182,18 +264,8 @@ export class MarshallCV5xx extends EventEmitter<MarshallCV5xxEvents> {
 		}
 		this.#sendMessage(viscaInquiryCommands.SYS_MenuModeInq).then(
 			(data) => {
-				// Response format
-				// Y0 50 0X FF
-				// Y = 0xZ0  + 0x80
-				// Z = camera id
-				// X = 2 == open, 3 == close
-				const header1 = 0x80 + (this.#camID << 4)
-				const msgId = 0x50
-				if (data[0] !== header1 || data[1] !== msgId) {
-					console.log('ERROR IN INQ RESP')
-					return // Error!! Handle this
-				}
-				this.#state.osdVisible = data[2] === 2
+				const para = this.#decodePacket(data, viscaResponseCommands.FourByteOneParaValue)
+				this.#state.osdVisible = para.x === 2
 				this.emit('stateChanged')
 			},
 			() => {

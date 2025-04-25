@@ -17,10 +17,32 @@ export const viscaCommands = {
 			one_push: '8x01043503FF',
 			manual: '8x01043505FF',
 		},
+		gain: {
+			red: {
+				rest: '8x01040300FF',
+				up: '8x01040302FF',
+				down: '8x01040303FF',
+				direct: '8x01044300000p0qFF',
+			},
+			blue: {
+				rest: '8x01040400FF',
+				up: '8x01040402FF',
+				down: '8x01040403FF',
+				direct: '8x01044400000p0qFF',
+			},
+		},
 	},
 }
 
 export const viscaInquiryCommands = {
 	SYS_MenuModeInq: '8x090606FF',
 	CAM_WBModeInq: '8x090435FF',
+	CAM_RGainInq: '8x090443FF',
+	CAM_BGainInq: '8x090444FF',
+}
+
+export enum viscaResponseCommands {
+	FourByteOneParaValue = 'y0500xFF',
+	SevenByteTwoParaValues = 'y05000000p0qFF',
+	SevenByteFourParaValues = 'y0500p0q0r0sFF',
 }
